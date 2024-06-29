@@ -1,3 +1,4 @@
+# Normaliziramo rate na 1 fps
 import os
 import cv2
 import numpy as np
