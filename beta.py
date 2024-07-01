@@ -128,7 +128,7 @@ def extract_and_track_humans(frames_folder, model, device, iou_threshold=0.5):
 
     return human_tracks
 
-# pretvaramo array u tensor; ovo moran isto malo popravit
+# pretvaramo array u tensor
 def tracks_to_tensors(human_tracks, num_frames, frames_folder, frame_size=(224, 224), num_required_frames=8):
     print("Converting tracks to tensors...")
     human_tensors = {}
