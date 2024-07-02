@@ -1,3 +1,13 @@
+!git clone https://github.com/ultralytics/yolov5.git
+%cd yolov5
+!pip install -r requirements.txt
+
+# Install additional dependencies
+!pip install deep-sort-realtime
+!pip install pytube
+!pip install transformers
+
+
 # Sad dela za 1 čovika na videu => da van 1 output
 # Triba ishendlat da za više ljudi da više outputa, ali i dalje 1 po čoviku
 
