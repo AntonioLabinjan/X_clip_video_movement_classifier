@@ -1,20 +1,17 @@
-# Sad je problem u temu ča ne prati mene ča delan nego me svaki put vidi kao 
-# da san drugi čovik => ne napravi jedinstveni tensor za mene, nego napravi tensor svaki put kad me detektira
-# to iduće riješavan
+# Sad dela za 1 čovika na videu => da van 1 output
+
 import os
 import cv2
 import numpy as np
 from pytube import YouTube
 from PIL import Image
 import torch
-import torchvision
 from torchvision.models.detection import fasterrcnn_resnet50_fpn
 from torchvision.transforms import functional as F
 from collections import defaultdict
-import matplotlib.pyplot as plt
-from transformers import AutoProcessor, XCLIPModel, XCLIPProcessor
+from transformers import XCLIPModel, XCLIPProcessor
 
-# Skinen video
+# Download video from YouTube
 def download_youtube_video(url, output_path='video.mp4'):
     print("Downloading video from YouTube...")
     yt = YouTube(url)
@@ -23,7 +20,7 @@ def download_youtube_video(url, output_path='video.mp4'):
     print("Download complete.")
     return output_path
 
-# extractamo frameove, dimenzije 224x224 da stane u xclip
+# Extract frames from video
 def extract_frames(video_path, output_folder='frames', frame_size=(224, 224), fps=1):
     print("Extracting frames from video...")
     if not os.path.exists(output_folder):
@@ -45,9 +42,9 @@ def extract_frames(video_path, output_folder='frames', frame_size=(224, 224), fp
         
         # Resize 
         resized_image = cv2.resize(image, frame_size)
-        # Normalizacija na interval od 0 do 1
+        # Normalization to interval [0, 1]
         normalized_image = resized_image / 255.0
-        # Spremanje u JPG
+        # Save as JPG
         frame_path = os.path.join(output_folder, f"frame_{extracted_count:05d}.jpg")
         cv2.imwrite(frame_path, (normalized_image * 255).astype(np.uint8))
         count += frame_interval
@@ -62,7 +59,7 @@ def extract_frames(video_path, output_folder='frames', frame_size=(224, 224), fp
     else:
         print("Failed to process the video into frames")
 
-# detectamo ljude
+# Detect humans in a frame
 def detect_humans_in_frame(frame, model, device):
     frame_tensor = F.to_tensor(frame).unsqueeze(0).to(device)
     model.eval()
@@ -70,7 +67,7 @@ def detect_humans_in_frame(frame, model, device):
         detections = model(frame_tensor)
     return detections[0]
 
-# tu stvaramo neki box za svakega čovika u frameu
+# Calculate Intersection over Union (IoU)
 def iou(box1, box2):
     x1, y1, x2, y2 = box1
     x1_, y1_, x2_, y2_ = box2
@@ -82,12 +79,13 @@ def iou(box1, box2):
     union_area = box1_area + box2_area - inter_area
     return inter_area / union_area
 
-# procesiramo ljudski movement i stavljamo u array
-def extract_and_track_humans(frames_folder, model, device, iou_threshold=0.5):
-    print("Detecting and tracking humans in frames...")
-    human_tracks = defaultdict(list)
+# Track the single human across frames
+def track_single_human(frames_folder, model, device, iou_threshold=0.5):
+    print("Detecting and tracking human in frames...")
     frames_files = sorted(os.listdir(frames_folder))
-    prev_frame_humans = []
+    human_track = []
+
+    prev_human = None
 
     for frame_index, frame_file in enumerate(frames_files):
         if frame_file.endswith('.jpg'):
@@ -98,144 +96,117 @@ def extract_and_track_humans(frames_folder, model, device, iou_threshold=0.5):
             scores = detections['scores']
             labels = detections['labels']
 
-            current_frame_humans = []
+            current_human = None
             for i in range(len(labels)):
-                if labels[i] == 1 and scores[i] > 0.5:  
-                    current_frame_humans.append(boxes[i].cpu().numpy())
-            
-            # Associate current_frame_humans with prev_frame_humans
-            for prev_human in prev_frame_humans:
-                best_iou = 0
-                best_match = None
-                for i, curr_human in enumerate(current_frame_humans):
-                    current_iou = iou(prev_human, curr_human)
-                    if current_iou > best_iou and current_iou > iou_threshold:
-                        best_iou = current_iou
-                        best_match = i
-                
-                if best_match is not None:
-                    human_tracks[id(prev_human)].append((frame_index, *current_frame_humans[best_match]))
-                    current_frame_humans.pop(best_match)
-                else:
-                    human_tracks[id(prev_human)].append((frame_index, *prev_human))
-            
-            for human in current_frame_humans:
-                human_tracks[id(human)].append((frame_index, *human))
-            
-            prev_frame_humans = current_frame_humans
-            
+                if labels[i] == 1 and scores[i] > 0.5:  # Label 1 is for person
+                    current_human = boxes[i].cpu().numpy()
+                    break  # Assuming there's only one human in the video
+
+            if prev_human is not None and current_human is not None:
+                if iou(prev_human, current_human) < iou_threshold:
+                    current_human = prev_human
+
+            if current_human is not None:
+                human_track.append((frame_index, *current_human))
+                prev_human = current_human
+
             print(f"Processed frame {frame_index + 1}/{len(frames_files)}")
 
-    return human_tracks
+    return human_track
 
-# pretvaramo array u tensor
-def tracks_to_tensors(human_tracks, num_frames, frames_folder, frame_size=(224, 224), num_required_frames=8):
-    print("Converting tracks to tensors...")
-    human_tensors = {}
+# Convert track to tensor
+def track_to_tensor(human_track, num_frames, frames_folder, frame_size=(224, 224), num_required_frames=8):
+    print("Converting track to tensor...")
     frames_files = sorted(os.listdir(frames_folder))
+    track_array = np.zeros((num_frames, 4), dtype=np.float32)
 
-    for human_id, track in human_tracks.items():
-        track_array = np.zeros((num_frames, 4), dtype=np.float32)
-        for entry in track:
-            frame_index, x1, y1, x2, y2 = entry
-            track_array[frame_index] = [x1, y1, x2, y2]
-        human_tensors[human_id] = torch.tensor(track_array)
+    for entry in human_track:
+        frame_index, x1, y1, x2, y2 = entry
+        track_array[frame_index] = [x1, y1, x2, y2]
 
-    xclip_human_tensors = {}
-    for human_id, tensor in human_tensors.items():
-        cropped_frames = []
-        for frame_index, box in enumerate(tensor.numpy()):
-            frame_path = os.path.join(frames_folder, frames_files[frame_index])
-            frame = Image.open(frame_path).convert("RGB")
-            if not np.array_equal(box, np.zeros(4)):  # If the box is not all zeros
-                xmin, ymin, xmax, ymax = map(int, box)
-                cropped_frame = frame.crop((xmin, ymin, xmax, ymax))
-                cropped_frame = cropped_frame.resize(frame_size, Image.Resampling.LANCZOS)
-                cropped_frame = np.array(cropped_frame) / 255.0  # Normalize to [0, 1]
-                cropped_frames.append(cropped_frame)
-            else:
-                cropped_frames.append(np.zeros((*frame_size, 3)))
-
-        if len(cropped_frames) < num_required_frames:
-            padding = [np.zeros((*frame_size, 3))] * (num_required_frames - len(cropped_frames))
-            cropped_frames.extend(padding)
+    cropped_frames = []
+    for frame_index, box in enumerate(track_array):
+        frame_path = os.path.join(frames_folder, frames_files[frame_index])
+        frame = Image.open(frame_path).convert("RGB")
+        if not np.array_equal(box, np.zeros(4)):  # If the box is not all zeros
+            xmin, ymin, xmax, ymax = map(int, box)
+            cropped_frame = frame.crop((xmin, ymin, xmax, ymax))
+            cropped_frame = cropped_frame.resize(frame_size, Image.Resampling.LANCZOS)
+            cropped_frame = np.array(cropped_frame) / 255.0  # Normalize to [0, 1]
+            cropped_frames.append(cropped_frame)
         else:
-            cropped_frames = cropped_frames[:num_required_frames]
-        
-        frames_array = np.array(cropped_frames, dtype=np.float32)
-        xclip_human_tensors[human_id] = torch.tensor(frames_array).permute(0, 3, 1, 2)  # Convert to (num_frames, channels, height, width)
+            cropped_frames.append(np.zeros((*frame_size, 3)))
+
+    if len(cropped_frames) < num_required_frames:
+        padding = [np.zeros((*frame_size, 3))] * (num_required_frames - len(cropped_frames))
+        cropped_frames.extend(padding)
+    else:
+        cropped_frames = cropped_frames[:num_required_frames]
     
-    return xclip_human_tensors
+    frames_array = np.array(cropped_frames, dtype=np.float32)
+    return torch.tensor(frames_array).permute(0, 3, 1, 2)  # Convert to (num_frames, channels, height, width)
 
-# feedamo stvar u xclip
-# Ovo je malo čudno; mislin da se svaki detected human gleda kao unique instance, a ne kao neki movement
-def classify_human_movements(xclip_human_tensors, xclip_model, processor, device):
-    print("Classifying human movements...")
-    classes = ["walking", "running", "jumping", "eating", "sitting"]
-    movement_classifications = {}
+# Classify human movement using X-CLIP
+def classify_human_movement(human_tensor, xclip_model, processor, device):
+    print("Classifying human movement...")
+    classes = ["reading", "running", "jumping", "eating", "crawling", "walking", "sitting", "standing still"]
 
-    for human_id, tensor in xclip_human_tensors.items():
-        print(f"Classifying movement for human ID {human_id} with tensor shape {tensor.shape}")
+    # Prepare text inputs with special tokens and padding
+    inputs = processor(
+        text=[f"a person {action}" for action in classes],
+        return_tensors="pt",
+        padding=True
+    )
+    
+    inputs = {key: value.to(device) for key, value in inputs.items()}
+    human_tensor = human_tensor.to(device)
+    
+    with torch.no_grad():
+        # Ensure the tensor is in the right shape for the model
+        human_tensor = human_tensor.unsqueeze(0)  # Add batch dimension
+        print(f"Tensor shape after unsqueeze: {human_tensor.shape}")
 
-        # Prepare text inputs with special tokens and padding
-        inputs = processor(
-            text=[f"a person {action}" for action in classes],
-            return_tensors="pt",
-            padding=True
-        )
-        
-        inputs = {key: value.to(device) for key, value in inputs.items()}
-        tensor = tensor.to(device)
-        
-        with torch.no_grad():
-            # Ensure the tensor is in the right shape for the model
-            tensor = tensor.unsqueeze(0)  # Add batch dimension
-            print(f"Tensor shape after unsqueeze: {tensor.shape}")
+        outputs = xclip_model(pixel_values=human_tensor, **inputs)
+        logits = outputs.logits_per_text
+        print(f"Logits shape: {logits.shape}")
 
-            outputs = xclip_model(pixel_values=tensor, **inputs)
-            logits = outputs.logits_per_text
-            print(f"Logits shape: {logits.shape}")
+        # Get the predicted class
+        predictions = torch.argmax(logits, dim=0)
+        predicted_class = classes[predictions.item()]
+        print(f"Predicted class: {predicted_class}")
 
-            # Get the predicted class
-            predictions = torch.argmax(logits, dim=0)
-            predicted_class = classes[predictions.item()]
-            print(f"Human ID {human_id} predicted class: {predicted_class}")
-
-        movement_classifications[human_id] = predicted_class
-
-    return movement_classifications
+    return predicted_class
 
 # Usage
-video_url = 'https://www.youtube.com/watch?v=84lYjtCfIvY'
+video_url = 'https://www.youtube.com/watch?v=CfhEWj9sd9A'
 video_path = 'video.mp4'
 frames_output_folder = 'frames'
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = fasterrcnn_resnet50_fpn(pretrained=True).to(device)
 
 try:
-    # skidanje
+    # Download video
     downloaded_video_path = download_youtube_video(video_url, video_path)
     
-    # Extractanje
+    # Extract frames
     extract_frames(downloaded_video_path, frames_output_folder)
     
-    # Detekcija i tracking ljudi u frameovima
-    human_tracks = extract_and_track_humans(frames_output_folder, model, device)
+    # Track the single human in frames
+    human_track = track_single_human(frames_output_folder, model, device)
     
-    # frameovi u tensore (to zafrkava)
+    # Convert track to tensor
     num_frames = len(os.listdir(frames_output_folder))
-    xclip_human_tensors = tracks_to_tensors(human_tracks, num_frames, frames_output_folder)
+    human_tensor = track_to_tensor(human_track, num_frames, frames_output_folder)
 
     # Load the X-CLIP model
     processor = XCLIPProcessor.from_pretrained("microsoft/xclip-base-patch32")
     xclip_model = XCLIPModel.from_pretrained("microsoft/xclip-base-patch32")
     xclip_model = xclip_model.to(device)
 
-    # Classify human movements
-    movement_classifications = classify_human_movements(xclip_human_tensors, xclip_model, processor, device)
+    # Classify human movement
+    movement_classification = classify_human_movement(human_tensor, xclip_model, processor, device)
     
-    for human_id, movement in movement_classifications.items():
-        print(f"Human ID {human_id} is {movement}")
+    print(f"The human in the video is {movement_classification}")
     print("Movement classification completed successfully.")
 except Exception as e:
     print(f"An error occurred: {e}")
