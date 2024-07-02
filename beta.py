@@ -1,15 +1,7 @@
-!git clone https://github.com/ultralytics/yolov5.git
-%cd yolov5
-!pip install -r requirements.txt
-
-# Install additional dependencies
-!pip install deep-sort-realtime
-!pip install pytube
-!pip install transformers
-
-
-# Sad dela za 1 čovika na videu => da van 1 output
-# Triba ishendlat da za više ljudi da više outputa, ali i dalje 1 po čoviku
+# STEPS:
+# Popravit brzinu videa da bude kao original
+# Napravit bounding box oko čovika
+# Shendlat rad s više ljudi
 
 import os
 import cv2
@@ -19,8 +11,8 @@ from PIL import Image
 import torch
 from torchvision.models.detection import fasterrcnn_resnet50_fpn
 from torchvision.transforms import functional as F
-from collections import defaultdict
 from transformers import XCLIPModel, XCLIPProcessor
+from google.colab import files  # To download files from Colab
 
 # Download video from YouTube
 def download_youtube_video(url, output_path='video.mp4'):
@@ -78,21 +70,12 @@ def detect_humans_in_frame(frame, model, device):
         detections = model(frame_tensor)
     return detections[0]
 
-# Calculate Intersection over Union (IoU)
-def iou(box1, box2):
-    x1, y1, x2, y2 = box1
-    x1_, y1_, x2_, y2_ = box2
-    xi1, yi1 = max(x1, x1_), max(y1, y1_)
-    xi2, yi2 = min(x2, x2_), min(y2, y2_)
-    inter_area = max(xi2 - xi1, 0) * max(yi2 - yi1, 0)
-    box1_area = (x2 - x1) * (y2 - y1)
-    box2_area = (x2_ - x1_) * (y2_ - y1_)
-    union_area = box1_area + box2_area - inter_area
-    return inter_area / union_area
-
-# Track the single human across frames
-def track_single_human(frames_folder, model, device, iou_threshold=0.5):
+# Track the single human across frames with smoothing
+def track_single_human(frames_folder, model, device, iou_threshold=0.5, smooth_factor=0.8, output_folder='output_frames'):
     print("Detecting and tracking human in frames...")
+    if not os.path.exists(output_folder):
+        os.makedirs(output_folder)
+
     frames_files = sorted(os.listdir(frames_folder))
     human_track = []
 
@@ -118,12 +101,26 @@ def track_single_human(frames_folder, model, device, iou_threshold=0.5):
                     current_human = prev_human
 
             if current_human is not None:
+                if prev_human is not None:
+                    current_human = smooth_factor * prev_human + (1 - smooth_factor) * current_human
                 human_track.append((frame_index, *current_human))
                 prev_human = current_human
+
+            # Draw bounding box on the frame
+            frame_np = np.array(frame)
+            if current_human is not None:
+                x1, y1, x2, y2 = map(int, current_human)
+                cv2.rectangle(frame_np, (x1, y1), (x2, y2), (255, 0, 0), 2)
+                label = "Person"
+                cv2.putText(frame_np, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 0, 0), 2)
+
+            output_frame_path = os.path.join(output_folder, frame_file)
+            cv2.imwrite(output_frame_path, cv2.cvtColor(frame_np, cv2.COLOR_RGB2BGR))
 
             print(f"Processed frame {frame_index + 1}/{len(frames_files)}")
 
     return human_track
+
 
 # Convert track to tensor
 def track_to_tensor(human_track, num_frames, frames_folder, frame_size=(224, 224), num_required_frames=8):
@@ -158,7 +155,7 @@ def track_to_tensor(human_track, num_frames, frames_folder, frame_size=(224, 224
     return torch.tensor(frames_array).permute(0, 3, 1, 2)  # Convert to (num_frames, channels, height, width)
 
 # Classify human movement using X-CLIP
-def classify_human_movement(human_tensor, xclip_model, processor, device):
+def classify_human_movement(human_tensor, xclip_model, processor, device, frames_folder, output_folder):
     print("Classifying human movement...")
     classes = ["reading", "running", "jumping", "eating", "crawling", "walking", "sitting", "standing still"]
 
@@ -173,25 +170,88 @@ def classify_human_movement(human_tensor, xclip_model, processor, device):
     human_tensor = human_tensor.to(device)
     
     with torch.no_grad():
-        # Ensure the tensor is in the right shape for the model
         human_tensor = human_tensor.unsqueeze(0)  # Add batch dimension
-        print(f"Tensor shape after unsqueeze: {human_tensor.shape}")
-
         outputs = xclip_model(pixel_values=human_tensor, **inputs)
         logits = outputs.logits_per_text
-        print(f"Logits shape: {logits.shape}")
 
-        # Get the predicted class
         predictions = torch.argmax(logits, dim=0)
         predicted_class = classes[predictions.item()]
-        print(f"Predicted class: {predicted_class}")
 
-    return predicted_class
+    # Add predicted class label to each frame
+    frames_files = sorted(os.listdir(frames_folder))
+    class_info = []
+    for frame_index, frame_file in enumerate(frames_files):
+        frame_path = os.path.join(frames_folder, frame_file)
+        frame = cv2.imread(frame_path)
+
+        label = f"Action: {predicted_class}"
+        # Decrease font scale to make the text smaller
+        font_scale = 0.3
+        thickness = 1
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        text_size = cv2.getTextSize(label, font, font_scale, thickness)[0]
+        
+        # Position text in the top-left corner
+        text_x = 10
+        text_y = 30
+        cv2.putText(frame, label, (text_x, text_y), font, font_scale, (0, 255, 0), thickness)
+
+        # Add bounding box around the detected human
+        if len(human_tensor.shape) == 4:  # Check if human_tensor is not empty
+            x1, y1, x2, y2 = map(int, human_tensor.squeeze(0)[frame_index].cpu().numpy())
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        
+        output_frame_path = os.path.join(output_folder, frame_file)
+        cv2.imwrite(output_frame_path, frame)
+
+        class_info.append((output_frame_path, (x1, y1, x2, y2) if len(human_tensor.shape) == 4 else None, predicted_class))
+
+    print(f"Predicted class: {predicted_class}")
+    return class_info
+
+def create_output_video(frames_folder, output_video_path, class_info, fps=25):
+    print("Creating output video...")
+    frames_files = sorted(os.listdir(frames_folder))
+    
+    # Read the first frame to get dimensions
+    first_frame = cv2.imread(os.path.join(frames_folder, frames_files[0]))
+    height, width, layers = first_frame.shape
+    
+    # Initialize video writer
+    video = cv2.VideoWriter(output_video_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (width, height))
+    
+    # Loop through frames and write to video
+    for frame_info in class_info:
+        frame_path, bbox, predicted_class = frame_info
+        frame = cv2.imread(frame_path)
+
+        if bbox is not None:
+            x1, y1, x2, y2 = bbox
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        
+        # Add class label
+        label = f"Action: {predicted_class}"
+        font_scale = 0.3
+        thickness = 1
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        text_size = cv2.getTextSize(label, font, font_scale, thickness)[0]
+        text_x = 10
+        text_y = 30
+        cv2.putText(frame, label, (text_x, text_y), font, font_scale, (0, 255, 0), thickness)
+
+        video.write(frame)
+    
+    # Release video writer
+    video.release()
+    print(f"Output video created at {output_video_path}")
+    return output_video_path  # Return the path of the created video
 
 # Usage
-video_url = 'https://www.youtube.com/watch?v=CfhEWj9sd9A'
+video_url = 'https://youtu.be/xxrC2KGok08'
 video_path = 'video.mp4'
 frames_output_folder = 'frames'
+output_frames_folder = 'output_frames'
+output_video_path = 'output_video.mp4'
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = fasterrcnn_resnet50_fpn(pretrained=True).to(device)
 
@@ -202,8 +262,8 @@ try:
     # Extract frames
     extract_frames(downloaded_video_path, frames_output_folder)
     
-    # Track the single human in frames
-    human_track = track_single_human(frames_output_folder, model, device)
+    # Track the single human in frames and save with bounding boxes
+    human_track = track_single_human(frames_output_folder, model, device, output_folder=output_frames_folder)
     
     # Convert track to tensor
     num_frames = len(os.listdir(frames_output_folder))
@@ -214,10 +274,17 @@ try:
     xclip_model = XCLIPModel.from_pretrained("microsoft/xclip-base-patch32")
     xclip_model = xclip_model.to(device)
 
-    # Classify human movement
-    movement_classification = classify_human_movement(human_tensor, xclip_model, processor, device)
+    # Classify human movement and save with class label and bounding box
+    class_info = classify_human_movement(human_tensor, xclip_model, processor, device, frames_output_folder, output_frames_folder)
     
-    print(f"The human in the video is {movement_classification}")
-    print("Movement classification completed successfully.")
+    # Create output video
+    output_video_path = create_output_video(output_frames_folder, output_video_path, class_info)
+    
+    # Download the output video file
+    print("Downloading the processed video...")
+    files.download(output_video_path)
+    
+    print(f"The human in the video is {class_info[0][2]}")
+    print("Movement classification and video creation completed successfully.")
 except Exception as e:
     print(f"An error occurred: {e}")
