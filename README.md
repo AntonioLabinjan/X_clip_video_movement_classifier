@@ -1,1 +1,4 @@
-Sad detecta ljude, ali ne vidi cijeli movement kao tensor, nego svaki put kad detecta čovika, napravi poseban tensor i klasificira ča trenutno vidi
+### STEPS:
+#### Popravit brzinu videa da bude kao original
+#### Napravit bounding box oko čovika
+#### Shendlat rad s više ljudi
