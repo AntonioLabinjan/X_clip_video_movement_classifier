@@ -1,4 +1,5 @@
 # Sad dela za 1 čovika na videu => da van 1 output
+# Triba ishendlat da za više ljudi da više outputa, ali i dalje 1 po čoviku
 
 import os
 import cv2
