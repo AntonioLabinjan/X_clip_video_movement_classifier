@@ -1,8 +1,3 @@
-# STEPS:
-# Popravit brzinu videa da bude kao original
-# Napravit bounding box oko čovika
-# Shendlat rad s više ljudi
-
 import os
 import cv2
 import numpy as np
@@ -12,7 +7,6 @@ import torch
 from torchvision.models.detection import fasterrcnn_resnet50_fpn
 from torchvision.transforms import functional as F
 from transformers import XCLIPModel, XCLIPProcessor
-from google.colab import files  # To download files from Colab
 
 # Download video from YouTube
 def download_youtube_video(url, output_path='video.mp4'):
@@ -23,8 +17,8 @@ def download_youtube_video(url, output_path='video.mp4'):
     print("Download complete.")
     return output_path
 
-# Extract frames from video
-def extract_frames(video_path, output_folder='frames', frame_size=(224, 224), fps=1):
+# Extract frames from video with original FPS
+def extract_frames(video_path, output_folder='frames'):
     print("Extracting frames from video...")
     if not os.path.exists(output_folder):
         os.makedirs(output_folder)
@@ -32,35 +26,61 @@ def extract_frames(video_path, output_folder='frames', frame_size=(224, 224), fp
     vidcap = cv2.VideoCapture(video_path)
     total_frames = int(vidcap.get(cv2.CAP_PROP_FRAME_COUNT))
     video_fps = vidcap.get(cv2.CAP_PROP_FPS)
-    frame_interval = int(video_fps / fps)
     
     count = 0
     extracted_count = 0
     
     while count < total_frames:
-        vidcap.set(cv2.CAP_PROP_POS_FRAMES, count)
         success, image = vidcap.read()
         if not success:
             break
         
-        # Resize 
-        resized_image = cv2.resize(image, frame_size)
-        # Normalization to interval [0, 1]
-        normalized_image = resized_image / 255.0
         # Save as JPG
         frame_path = os.path.join(output_folder, f"frame_{extracted_count:05d}.jpg")
-        cv2.imwrite(frame_path, (normalized_image * 255).astype(np.uint8))
-        count += frame_interval
+        cv2.imwrite(frame_path, image)
+        count += 1
         extracted_count += 1
 
-        print(f"Extracted frame {extracted_count}/{total_frames//frame_interval}")
+        print(f"Extracted frame {extracted_count}/{total_frames}")
 
     vidcap.release()
     
     if extracted_count > 0:
-        print(f"Video successfully processed into {extracted_count} frames with dimensions {frame_size}")
+        print(f"Video successfully processed into {extracted_count} frames.")
     else:
         print("Failed to process the video into frames")
+
+def iou(box1, box2):
+    """
+    Calculate the Intersection over Union (IoU) of two bounding boxes.
+
+    Parameters:
+    - box1 (numpy array): Bounding box coordinates in format [xmin, ymin, xmax, ymax].
+    - box2 (numpy array): Bounding box coordinates in format [xmin, ymin, xmax, ymax].
+
+    Returns:
+    - float: Intersection over Union (IoU) value.
+    """
+    # Calculate intersection coordinates
+    xmin_inter = max(box1[0], box2[0])
+    ymin_inter = max(box1[1], box2[1])
+    xmax_inter = min(box1[2], box2[2])
+    ymax_inter = min(box1[3], box2[3])
+
+    # Calculate intersection area
+    intersection_area = max(0, xmax_inter - xmin_inter + 1) * max(0, ymax_inter - ymin_inter + 1)
+
+    # Calculate area of each bounding box
+    box1_area = (box1[2] - box1[0] + 1) * (box1[3] - box1[1] + 1)
+    box2_area = (box2[2] - box2[0] + 1) * (box2[3] - box2[1] + 1)
+
+    # Calculate union area
+    union_area = box1_area + box2_area - intersection_area
+
+    # Calculate IoU
+    iou = intersection_area / union_area
+
+    return iou
 
 # Detect humans in a frame
 def detect_humans_in_frame(frame, model, device):
@@ -121,43 +141,53 @@ def track_single_human(frames_folder, model, device, iou_threshold=0.5, smooth_f
 
     return human_track
 
-
 # Convert track to tensor
 def track_to_tensor(human_track, num_frames, frames_folder, frame_size=(224, 224), num_required_frames=8):
     print("Converting track to tensor...")
     frames_files = sorted(os.listdir(frames_folder))
     track_array = np.zeros((num_frames, 4), dtype=np.float32)
 
+    # Populate track_array with bounding box coordinates
     for entry in human_track:
         frame_index, x1, y1, x2, y2 = entry
         track_array[frame_index] = [x1, y1, x2, y2]
 
     cropped_frames = []
+
+    # Create cropped frames based on track_array
     for frame_index, box in enumerate(track_array):
         frame_path = os.path.join(frames_folder, frames_files[frame_index])
         frame = Image.open(frame_path).convert("RGB")
+
         if not np.array_equal(box, np.zeros(4)):  # If the box is not all zeros
             xmin, ymin, xmax, ymax = map(int, box)
             cropped_frame = frame.crop((xmin, ymin, xmax, ymax))
-            cropped_frame = cropped_frame.resize(frame_size, Image.Resampling.LANCZOS)
+            cropped_frame = cropped_frame.resize(frame_size, Image.BILINEAR)  # Changed to Image.BILINEAR for resizing
             cropped_frame = np.array(cropped_frame) / 255.0  # Normalize to [0, 1]
             cropped_frames.append(cropped_frame)
         else:
             cropped_frames.append(np.zeros((*frame_size, 3)))
 
+    # Handle padding for frames_array
     if len(cropped_frames) < num_required_frames:
         padding = [np.zeros((*frame_size, 3))] * (num_required_frames - len(cropped_frames))
         cropped_frames.extend(padding)
     else:
         cropped_frames = cropped_frames[:num_required_frames]
-    
+
     frames_array = np.array(cropped_frames, dtype=np.float32)
-    return torch.tensor(frames_array).permute(0, 3, 1, 2)  # Convert to (num_frames, channels, height, width)
+    print(f"Shape of frames_array before permutation: {frames_array.shape}")
+
+    # Convert to PyTorch tensor and permute dimensions
+    frames_tensor = torch.tensor(frames_array).permute(0, 3, 1, 2)  # (num_frames, channels, height, width)
+    print(f"Shape of frames_tensor after permutation: {frames_tensor.shape}")
+
+    return frames_tensor
 
 # Classify human movement using X-CLIP
 def classify_human_movement(human_tensor, xclip_model, processor, device, frames_folder, output_folder):
     print("Classifying human movement...")
-    classes = ["reading", "running", "jumping", "eating", "crawling", "walking", "sitting", "standing still"]
+    classes = ["reading", "sleeping", "jumping", "running", "eating", "crawling", "walking", "sitting", "standing still"]
 
     # Prepare text inputs with special tokens and padding
     inputs = processor(
@@ -209,7 +239,7 @@ def classify_human_movement(human_tensor, xclip_model, processor, device, frames
     print(f"Predicted class: {predicted_class}")
     return class_info
 
-def create_output_video(frames_folder, output_video_path, class_info, fps=25):
+def create_output_video(frames_folder, output_video_path, class_info, fps):
     print("Creating output video...")
     frames_files = sorted(os.listdir(frames_folder))
     
@@ -247,7 +277,7 @@ def create_output_video(frames_folder, output_video_path, class_info, fps=25):
     return output_video_path  # Return the path of the created video
 
 # Usage
-video_url = 'https://youtu.be/xxrC2KGok08'
+video_url = 'https://www.youtube.com/shorts/bOBgAeebco0'
 video_path = 'video.mp4'
 frames_output_folder = 'frames'
 output_frames_folder = 'output_frames'
@@ -268,7 +298,7 @@ try:
     # Convert track to tensor
     num_frames = len(os.listdir(frames_output_folder))
     human_tensor = track_to_tensor(human_track, num_frames, frames_output_folder)
-
+    
     # Load the X-CLIP model
     processor = XCLIPProcessor.from_pretrained("microsoft/xclip-base-patch32")
     xclip_model = XCLIPModel.from_pretrained("microsoft/xclip-base-patch32")
@@ -278,13 +308,13 @@ try:
     class_info = classify_human_movement(human_tensor, xclip_model, processor, device, frames_output_folder, output_frames_folder)
     
     # Create output video
-    output_video_path = create_output_video(output_frames_folder, output_video_path, class_info)
-    
-    # Download the output video file
-    print("Downloading the processed video...")
-    files.download(output_video_path)
+    fps = int(cv2.VideoCapture(downloaded_video_path).get(cv2.CAP_PROP_FPS))
+    output_video_path = create_output_video(output_frames_folder, output_video_path, class_info, fps)
     
     print(f"The human in the video is {class_info[0][2]}")
     print("Movement classification and video creation completed successfully.")
 except Exception as e:
     print(f"An error occurred: {e}")
+    # treba nan bounding-box oko čovika i normalna brzina videa; to popravit iduće
+    # trebamo shendlat više ljudi
+    # očekujen walking/running/crawling za output
