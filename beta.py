@@ -26,6 +26,7 @@ def extract_frames(video_path, output_folder='frames'):
     vidcap = cv2.VideoCapture(video_path)
     total_frames = int(vidcap.get(cv2.CAP_PROP_FRAME_COUNT))
     video_fps = vidcap.get(cv2.CAP_PROP_FPS)
+    print(f"Total frames: {total_frames}, FPS: {video_fps}")
     
     count = 0
     extracted_count = 0
@@ -84,6 +85,7 @@ def iou(box1, box2):
 
 # Detect humans in a frame
 def detect_humans_in_frame(frame, model, device):
+    print("Detecting humans in frame...")
     frame_tensor = F.to_tensor(frame).unsqueeze(0).to(device)
     model.eval()
     with torch.no_grad():
@@ -288,24 +290,30 @@ model = fasterrcnn_resnet50_fpn(pretrained=True).to(device)
 try:
     # Download video
     downloaded_video_path = download_youtube_video(video_url, video_path)
+    print(f"Video downloaded to {downloaded_video_path}")
     
     # Extract frames
     extract_frames(downloaded_video_path, frames_output_folder)
+    print(f"Frames extracted to {frames_output_folder}")
     
     # Track the single human in frames and save with bounding boxes
     human_track = track_single_human(frames_output_folder, model, device, output_folder=output_frames_folder)
+    print("Human track detection complete.")
     
     # Convert track to tensor
     num_frames = len(os.listdir(frames_output_folder))
     human_tensor = track_to_tensor(human_track, num_frames, frames_output_folder)
+    print("Human track converted to tensor.")
     
     # Load the X-CLIP model
     processor = XCLIPProcessor.from_pretrained("microsoft/xclip-base-patch32")
     xclip_model = XCLIPModel.from_pretrained("microsoft/xclip-base-patch32")
     xclip_model = xclip_model.to(device)
+    print("X-CLIP model loaded.")
 
     # Classify human movement and save with class label and bounding box
     class_info = classify_human_movement(human_tensor, xclip_model, processor, device, frames_output_folder, output_frames_folder)
+    print("Human movement classification complete.")
     
     # Create output video
     fps = int(cv2.VideoCapture(downloaded_video_path).get(cv2.CAP_PROP_FPS))
@@ -315,6 +323,5 @@ try:
     print("Movement classification and video creation completed successfully.")
 except Exception as e:
     print(f"An error occurred: {e}")
-    # treba nan bounding-box oko čovika i normalna brzina videa; to popravit iduće
-    # trebamo shendlat više ljudi
-    # očekujen walking/running/crawling za output
+# boudning box za svakega čovika, box prehitit u array/tensor, primjenit x-clip na svaki box pa da dela s više ljudi
+# tornat normalan frame rate na kraju
