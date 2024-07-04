@@ -1,3 +1,10 @@
+!pip install pytube
+!pip install opencv-python-headless
+!pip install numpy
+!pip install pillow
+!pip install torch torchvision
+!pip install transformers
+
 import os
 import cv2
 import numpy as np
@@ -189,7 +196,7 @@ def track_to_tensor(human_track, num_frames, frames_folder, frame_size=(224, 224
 # Classify human movement using X-CLIP
 def classify_human_movement(human_tensor, xclip_model, processor, device, frames_folder, output_folder):
     print("Classifying human movement...")
-    classes = ["reading", "sleeping", "jumping", "running", "eating", "crawling", "walking", "sitting", "standing still"]
+    classes = ["reading", "sleeping", "sitting", "running", "eating", "crawling", "walking", "jumping", "standing still"]
 
     # Prepare text inputs with special tokens and padding
     inputs = processor(
@@ -279,7 +286,7 @@ def create_output_video(frames_folder, output_video_path, class_info, fps):
     return output_video_path  # Return the path of the created video
 
 # Usage
-video_url = 'https://www.youtube.com/shorts/bOBgAeebco0'
+video_url = 'https://www.youtube.com/shorts/bOBgAeebco0' 
 video_path = 'video.mp4'
 frames_output_folder = 'frames'
 output_frames_folder = 'output_frames'
@@ -323,5 +330,5 @@ try:
     print("Movement classification and video creation completed successfully.")
 except Exception as e:
     print(f"An error occurred: {e}")
-# boudning box za svakega čovika, box prehitit u array/tensor, primjenit x-clip na svaki box pa da dela s više ljudi
-# tornat normalan frame rate na kraju
+# boudning box za svakega čovika, pa da dela s više ljudi
+# očekujen sitting ili standing still
