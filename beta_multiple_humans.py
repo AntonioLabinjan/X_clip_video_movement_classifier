@@ -1,3 +1,5 @@
+# DELA ALI JE GRDO KO VRAG
+
 !pip install pytube
 !pip install opencv-python-headless
 !pip install numpy
