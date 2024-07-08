@@ -68,32 +68,33 @@ def detect_humans_in_frame(frame, model, device):
     return detections[0]
 
 # Assign unique IDs to detected humans based on bounding box IoU
-def assign_ids_to_detections(previous_detections, current_detections, iou_threshold=0.5):
+def assign_ids_to_detections(previous_detections, current_detections, previous_id_map, iou_threshold=0.5):
     if not previous_detections:
         # Initialize with current detections
-        return {i: i for i in range(len(current_detections['boxes']))}
+        current_id_map = {i: i for i in range(len(current_detections['boxes']))}
+        return current_id_map
 
-    id_mapping = {}
+    current_id_map = {}
     assigned_ids = set()
 
     for i, current_box in enumerate(current_detections['boxes']):
         best_iou = 0
         best_id = None
         for j, previous_box in enumerate(previous_detections['boxes']):
-            iou = compute_iou(previous_box, current_box)
-            if iou > best_iou and iou > iou_threshold and j not in assigned_ids:
+            iou = compute_iou(previous_box.cpu().numpy(), current_box.cpu().numpy())
+            if iou > best_iou and iou > iou_threshold and previous_id_map[j] not in assigned_ids:
                 best_iou = iou
-                best_id = j
+                best_id = previous_id_map[j]
 
         if best_id is not None:
-            id_mapping[i] = best_id
+            current_id_map[i] = best_id
             assigned_ids.add(best_id)
         else:
-            new_id = max(previous_detections['ids'].values(), default=-1) + 1
-            id_mapping[i] = new_id
-            previous_detections['ids'][new_id] = new_id
+            new_id = max(previous_id_map.values(), default=-1) + 1
+            current_id_map[i] = new_id
+            assigned_ids.add(new_id)
 
-    return id_mapping
+    return current_id_map
 
 # Compute IoU between two bounding boxes
 def compute_iou(box1, box2):
@@ -122,6 +123,7 @@ def track_multiple_humans(frames_folder, model, device, output_folder='output_fr
     frames_files = sorted(os.listdir(frames_folder))
     human_tracks = {}
     previous_detections = {}
+    previous_id_map = {}
 
     for frame_index, frame_file in enumerate(frames_files):
         if frame_file.endswith('.jpg'):
@@ -132,7 +134,7 @@ def track_multiple_humans(frames_folder, model, device, output_folder='output_fr
             if frame_index == 0:
                 id_mapping = {i: i for i in range(len(detections['boxes']))}
             else:
-                id_mapping = assign_ids_to_detections(previous_detections, detections)
+                id_mapping = assign_ids_to_detections(previous_detections, detections, previous_id_map)
 
             # Draw bounding box and assign IDs
             frame_np = np.array(frame)
@@ -148,6 +150,7 @@ def track_multiple_humans(frames_folder, model, device, output_folder='output_fr
                     human_tracks[id].append(frame)
 
             previous_detections = {'boxes': detections['boxes'], 'ids': id_mapping}
+            previous_id_map = id_mapping
 
             output_frame_path = os.path.join(output_folder, frame_file)
             cv2.imwrite(output_frame_path, cv2.cvtColor(frame_np, cv2.COLOR_RGB2BGR))
@@ -215,7 +218,6 @@ def classify_human_movement(human_tensors, xclip_model, processor, device):
 
     return movement_predictions
 
-# Create video from frames with annotations
 # Create video from frames with annotations
 def create_video_from_frames_with_annotations(frames_folder, output_video_path, fps, movement_predictions, output_folder='annotated_frames'):
     print("Creating output video with annotations...")
