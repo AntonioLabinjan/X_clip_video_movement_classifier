@@ -1,5 +1,5 @@
 # DELA ALI JE GRDO KO VRAG
-# woo-hoo.ipynb na colabu
+# works_ali_ugly.ipynb na colabu
 
 !pip install pytube
 !pip install opencv-python-headless
