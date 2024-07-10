@@ -1,7 +1,4 @@
-# DELA ALI JE GRDO KO VRAG
-# works_ali_ugly.ipynb na colabu
-
-!pip install pytube
+!pip install yt-dlp
 !pip install opencv-python-headless
 !pip install numpy
 !pip install pillow
@@ -11,7 +8,7 @@
 import os
 import cv2
 import numpy as np
-from pytube import YouTube
+import yt_dlp
 from PIL import Image
 import torch
 from torchvision.models.detection import fasterrcnn_resnet50_fpn
@@ -21,13 +18,13 @@ from transformers import XCLIPModel, XCLIPProcessor
 # Download video from YouTube
 def download_youtube_video(url, output_path='video.mp4'):
     print("Downloading video from YouTube...")
-    yt = YouTube(url)
-    stream = yt.streams.filter(progressive=True, file_extension='mp4').first()
-    stream.download(filename=output_path)
+    ydl_opts = {'outtmpl': output_path, 'format': 'mp4'}
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        ydl.download([url])
     print("Download complete.")
     return output_path
 
-# Extract frames from video with original FPS
+# Extract frames from video
 def extract_frames(video_path, output_folder='frames'):
     print("Extracting frames from video...")
     if not os.path.exists(output_folder):
@@ -46,24 +43,19 @@ def extract_frames(video_path, output_folder='frames'):
         if not success:
             break
 
-        # Save as JPG
         frame_path = os.path.join(output_folder, f"frame_{extracted_count:05d}.jpg")
         cv2.imwrite(frame_path, image)
         count += 1
         extracted_count += 1
-
-        print(f"Extracted frame {extracted_count}/{total_frames}")
+        if extracted_count % 10 == 0:
+            print(f"{extracted_count}/{total_frames} frames extracted...")
 
     vidcap.release()
-
-    if extracted_count > 0:
-        print(f"Video successfully processed into {extracted_count} frames.")
-    else:
-        print("Failed to process the video into frames")
+    print(f"Video successfully processed into {extracted_count} frames.")
+    return extracted_count, video_fps
 
 # Detect humans in a frame
 def detect_humans_in_frame(frame, model, device):
-    print("Detecting humans in frame...")
     frame_tensor = F.to_tensor(frame).unsqueeze(0).to(device)
     model.eval()
     with torch.no_grad():
@@ -73,7 +65,6 @@ def detect_humans_in_frame(frame, model, device):
 # Assign unique IDs to detected humans based on bounding box IoU
 def assign_ids_to_detections(previous_detections, current_detections, previous_id_map, iou_threshold=0.5):
     if not previous_detections:
-        # Initialize with current detections
         current_id_map = {i: i for i in range(len(current_detections['boxes']))}
         return current_id_map
 
@@ -139,7 +130,6 @@ def track_multiple_humans(frames_folder, model, device, output_folder='output_fr
             else:
                 id_mapping = assign_ids_to_detections(previous_detections, detections, previous_id_map)
 
-            # Draw bounding box and assign IDs
             frame_np = np.array(frame)
             for i, box in enumerate(detections['boxes']):
                 if detections['labels'][i] == 1 and detections['scores'][i] > 0.5:  # Label 1 is for person
@@ -157,9 +147,10 @@ def track_multiple_humans(frames_folder, model, device, output_folder='output_fr
 
             output_frame_path = os.path.join(output_folder, frame_file)
             cv2.imwrite(output_frame_path, cv2.cvtColor(frame_np, cv2.COLOR_RGB2BGR))
+            if frame_index % 10 == 0:
+                print(f"{frame_index}/{len(frames_files)} frames processed for tracking...")
 
-            print(f"Processed frame {frame_index + 1}/{len(frames_files)}")
-
+    print("Human tracking complete.")
     return human_tracks
 
 # Convert tracks to tensors
@@ -175,7 +166,6 @@ def convert_tracks_to_tensors(human_tracks, frame_size=(224, 224), num_required_
             cropped_frame = np.array(frame) / 255.0  # Normalize to [0, 1]
             cropped_frames.append(cropped_frame)
 
-        # Handle padding for frames_array
         if len(cropped_frames) < num_required_frames:
             padding = [np.zeros((*frame_size, 3))] * (num_required_frames - len(cropped_frames))
             cropped_frames.extend(padding)
@@ -183,14 +173,10 @@ def convert_tracks_to_tensors(human_tracks, frame_size=(224, 224), num_required_
             cropped_frames = cropped_frames[:num_required_frames]
 
         frames_array = np.array(cropped_frames, dtype=np.float32)
-        print(f"Shape of frames_array before permutation: {frames_array.shape}")
-
-        # Convert to PyTorch tensor and permute dimensions
         frames_tensor = torch.tensor(frames_array).permute(0, 3, 1, 2)  # (num_frames, channels, height, width)
-        print(f"Shape of frames_tensor after permutation: {frames_tensor.shape}")
-
         human_tensors[track_id] = frames_tensor
 
+    print("Track conversion to tensors complete.")
     return human_tensors
 
 # Classify human movement using X-CLIP
@@ -199,13 +185,7 @@ def classify_human_movement(human_tensors, xclip_model, processor, device):
     classes = ["sitting", "standing still", "playing football"]
     movement_predictions = {}
 
-    # Prepare text inputs with special tokens and padding
-    inputs = processor(
-        text=classes,
-        return_tensors="pt",
-        padding=True
-    )
-
+    inputs = processor(text=classes, return_tensors="pt", padding=True)
     inputs = {key: value.to(device) for key, value in inputs.items()}
 
     for track_id, human_tensor in human_tensors.items():
@@ -218,7 +198,9 @@ def classify_human_movement(human_tensors, xclip_model, processor, device):
             predictions = torch.argmax(logits, dim=0)
             predicted_class = classes[predictions.item()]
             movement_predictions[track_id] = predicted_class
+            print(f"Track ID {track_id} classified as {predicted_class}")
 
+    print("Human movement classification complete.")
     return movement_predictions
 
 # Create video from frames with annotations
@@ -234,26 +216,19 @@ def create_video_from_frames_with_annotations(frames_folder, output_video_path, 
             frame_path = os.path.join(frames_folder, frame_file)
             frame = cv2.imread(frame_path)
             if frame is None:
-                print(f"Error reading frame at {frame_path}")
                 continue
             
             frame_height, frame_width = frame.shape[:2]
 
-            # Annotate frame
             for track_id, movement in movement_predictions.items():
                 cv2.putText(frame, f"ID: {track_id}, Action: {movement}", (10, frame_height - 10 - 30 * track_id), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
-            # Save annotated frame
             annotated_frame_path = os.path.join(output_folder, frame_file)
             cv2.imwrite(annotated_frame_path, frame)
-            if not cv2.imwrite(annotated_frame_path, frame):
-                print(f"Failed to save annotated frame at {annotated_frame_path}")
 
-    # Create video
     first_frame_path = os.path.join(output_folder, frames_files[0])
     first_frame = cv2.imread(first_frame_path)
     if first_frame is None:
-        print(f"Error reading first annotated frame at {first_frame_path}")
         return
 
     frame_height, frame_width = first_frame.shape[:2]
@@ -264,13 +239,12 @@ def create_video_from_frames_with_annotations(frames_folder, output_video_path, 
             annotated_frame_path = os.path.join(output_folder, frame_file)
             frame = cv2.imread(annotated_frame_path)
             if frame is None:
-                print(f"Error reading annotated frame at {annotated_frame_path}")
                 continue
             video.write(frame)
 
     video.release()
     print(f"Output video created at {output_video_path}")
-    return output_video_path  # Return the path of the created video
+    return output_video_path
 
 # Usage
 video_url = 'https://youtu.be/_l7XGiDuydg'
@@ -287,7 +261,7 @@ try:
     print(f"Video downloaded to {downloaded_video_path}")
 
     # Extract frames
-    extract_frames(downloaded_video_path, frames_output_folder)
+    frame_count, video_fps = extract_frames(downloaded_video_path, frames_output_folder)
     print(f"Frames extracted to {frames_output_folder}")
 
     # Track multiple humans in frames and save with bounding boxes
@@ -311,8 +285,7 @@ try:
     for track_id, movement in movement_predictions.items():
         print(f"Track ID {track_id}: {movement}")
 
-    fps = int(cv2.VideoCapture(downloaded_video_path).get(cv2.CAP_PROP_FPS))
-    output_video_with_boxes = create_video_from_frames_with_annotations(output_frames_folder, output_video_path, fps, movement_predictions)
+    output_video_with_boxes = create_video_from_frames_with_annotations(output_frames_folder, output_video_path, video_fps, movement_predictions)
     print(f"Output video with bounding boxes created at {output_video_with_boxes}")
 
 except Exception as e:
