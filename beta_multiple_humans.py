@@ -1,9 +1,5 @@
-!pip install yt-dlp
-!pip install opencv-python-headless
-!pip install numpy
-!pip install pillow
-!pip install torch torchvision
-!pip install transformers
+!pip install opencv-python-headless numpy yt-dlp torch torchvision transformers
+
 
 import os
 import cv2
@@ -136,11 +132,11 @@ def track_multiple_humans(frames_folder, model, device, output_folder='output_fr
                     x1, y1, x2, y2 = map(int, box.cpu().numpy())
                     id = id_mapping[i]
                     cv2.rectangle(frame_np, (x1, y1), (x2, y2), (255, 0, 0), 2)
-                    cv2.putText(frame_np, f"ID: {id}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 0, 0), 2)
+                    #cv2.putText(frame_np, f"ID: {id}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 0, 0), 2) (ovo je potencijalno viška)
 
                     if id not in human_tracks:
                         human_tracks[id] = []
-                    human_tracks[id].append(frame)
+                    human_tracks[id].append((frame_file, (x1, y1, x2, y2)))
 
             previous_detections = {'boxes': detections['boxes'], 'ids': id_mapping}
             previous_id_map = id_mapping
@@ -161,7 +157,8 @@ def convert_tracks_to_tensors(human_tracks, frame_size=(224, 224), num_required_
     for track_id, frames in human_tracks.items():
         cropped_frames = []
 
-        for frame in frames:
+        for frame_file, box in frames:
+            frame = Image.open(os.path.join(frames_output_folder, frame_file)).convert("RGB")
             frame = frame.resize(frame_size, Image.BILINEAR)  # Resize to required size
             cropped_frame = np.array(frame) / 255.0  # Normalize to [0, 1]
             cropped_frames.append(cropped_frame)
@@ -221,7 +218,10 @@ def create_video_from_frames_with_annotations(frames_folder, output_video_path, 
             frame_height, frame_width = frame.shape[:2]
 
             for track_id, movement in movement_predictions.items():
-                cv2.putText(frame, f"ID: {track_id}, Action: {movement}", (10, frame_height - 10 - 30 * track_id), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                for frame_info in human_tracks[track_id]:
+                    if frame_info[0] == frame_file:
+                        x1, y1, x2, y2 = frame_info[1]
+                        cv2.putText(frame, f"ID{track_id} - {movement}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
             annotated_frame_path = os.path.join(output_folder, frame_file)
             cv2.imwrite(annotated_frame_path, frame)
