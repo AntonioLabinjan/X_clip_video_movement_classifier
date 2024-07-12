@@ -1,3 +1,5 @@
+# smanjena slova; još ih triba bolje pozicionirat i potencijalno promijenit boju
+
 !pip install opencv-python-headless numpy yt-dlp torch torchvision transformers
 
 
@@ -132,7 +134,6 @@ def track_multiple_humans(frames_folder, model, device, output_folder='output_fr
                     x1, y1, x2, y2 = map(int, box.cpu().numpy())
                     id = id_mapping[i]
                     cv2.rectangle(frame_np, (x1, y1), (x2, y2), (255, 0, 0), 2)
-                    #cv2.putText(frame_np, f"ID: {id}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 0, 0), 2) (ovo je potencijalno viška)
 
                     if id not in human_tracks:
                         human_tracks[id] = []
@@ -221,7 +222,7 @@ def create_video_from_frames_with_annotations(frames_folder, output_video_path, 
                 for frame_info in human_tracks[track_id]:
                     if frame_info[0] == frame_file:
                         x1, y1, x2, y2 = frame_info[1]
-                        cv2.putText(frame, f"ID{track_id} - {movement}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                        cv2.putText(frame, f"ID{track_id} - {movement}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 0), 2) # ovo mijenja boju i veličinu slova (sad san ih malo smanjija)
 
             annotated_frame_path = os.path.join(output_folder, frame_file)
             cv2.imwrite(annotated_frame_path, frame)
@@ -247,7 +248,7 @@ def create_video_from_frames_with_annotations(frames_folder, output_video_path, 
     return output_video_path
 
 # Usage
-video_url = 'https://youtu.be/_l7XGiDuydg'
+video_url = 'https://youtu.be/l4Lyr_WuW5g'
 video_path = 'video.mp4'
 frames_output_folder = 'frames'
 output_frames_folder = 'output_frames'
