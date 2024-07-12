@@ -180,7 +180,7 @@ def convert_tracks_to_tensors(human_tracks, frame_size=(224, 224), num_required_
 # Classify human movement using X-CLIP
 def classify_human_movement(human_tensors, xclip_model, processor, device):
     print("Classifying human movement...")
-    classes = ["sitting", "standing still", "playing football"]
+    classes = ["walking", "running"]
     movement_predictions = {}
 
     inputs = processor(text=classes, return_tensors="pt", padding=True)
@@ -222,7 +222,7 @@ def create_video_from_frames_with_annotations(frames_folder, output_video_path, 
                 for frame_info in human_tracks[track_id]:
                     if frame_info[0] == frame_file:
                         x1, y1, x2, y2 = frame_info[1]
-                        cv2.putText(frame, f"ID{track_id} - {movement}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 0), 2) # ovo mijenja boju i veličinu slova (sad san ih malo smanjija)
+                        cv2.putText(frame, f"ID{track_id} - {movement}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (0, 255, 0), 2) # ovo mijenja boju i veličinu slova (sad san ih malo smanjija) => ovaj font size mi se sviđa
 
             annotated_frame_path = os.path.join(output_folder, frame_file)
             cv2.imwrite(annotated_frame_path, frame)
@@ -248,7 +248,7 @@ def create_video_from_frames_with_annotations(frames_folder, output_video_path, 
     return output_video_path
 
 # Usage
-video_url = 'https://youtu.be/l4Lyr_WuW5g'
+video_url = 'https://www.youtube.com/watch?v=ORrrKXGx2SE'
 video_path = 'video.mp4'
 frames_output_folder = 'frames'
 output_frames_folder = 'output_frames'
