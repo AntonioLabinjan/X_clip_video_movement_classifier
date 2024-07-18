@@ -1,7 +1,1 @@
-### STEPS:
-#### Omogućit više boxeva za više ljudi
-#### Shendlat klasifikaciju za više bounding boxeva
-#### delan u fajlu testni.ipynb => njega vrtin i na colabu
-#### box&class.ipynb je onaj koji dela za 1 čovika
-
-# ooga booga.py ima print klasa za više ljudi. Još treba sredit annotation
+### IGNORIRAT SVE OSIM final.py :)
